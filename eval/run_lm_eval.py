@@ -4,7 +4,6 @@
 
 依赖:
   pip install lm-eval
-  (HuggingFace 后端还需: pip install accelerate)
 模型路径默认: /root/fshare/models/Qwen/Qwen3-0.6B
 """
 
@@ -80,7 +79,7 @@ def main() -> int:
     args.output_path = args.output_path.resolve()
     args.output_path.mkdir(parents=True, exist_ok=True)
 
-    # lm_eval run --model hf --model_args pretrained=MODEL_PATH,trust_remote_code=True ...
+    # lm_eval run --model vllm --model_args pretrained=MODEL_PATH,trust_remote_code=True ...
     model_args = f"pretrained={args.model}"
     if args.trust_remote_code and not args.no_trust_remote_code:
         model_args += ",trust_remote_code=True"
