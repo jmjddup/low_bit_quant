@@ -217,6 +217,18 @@ def fake_quant_mixed_bymask(
     weight_q = fake_quant_mix_int_bymask(weight, hmask, low_bit, high_bit, sym)
     return weight_q
 
+def test_fake_quant_mixed_bymask():
+    activation = torch.randn(1024, 4096).to(torch.bfloat16)
+    weight = torch.randn(1024, 4096).to(torch.bfloat16)
+    low_bit = 2
+    high_bit = 4
+    l2h_ratio = 0.5
+    sym = True
+    output = fake_quant_mixed_bymask(activation, weight, low_bit, high_bit, l2h_ratio, sym)
+    mse = torch.mean((weight - output) ** 2).item()
+    print(f"MSE: {mse}")
+    return mse
+
 def test_fake_quant_mix_int_bycolumn():
     input_tensor = torch.randn(1024, 4096).to(torch.bfloat16)
     low_bit = 2
@@ -308,7 +320,8 @@ def parse_model(model_path):
 def main():
     # parse_model("/root/fshare/models/Qwen/Qwen3-0.6B/model.safetensors")
     # test_fake_quant_int_multi()
-    test_fake_quant_mix_int_bycolumn()
+    # test_fake_quant_mix_int_bycolumn()
+    test_fake_quant_mixed_bymask()
 
 if __name__ == "__main__":
     main()
