@@ -266,7 +266,7 @@ def gen_config(
     syms=[True, False],
     low_bits=[2],
     high_bits=[4],
-    l2h_ratios=[0.5, 0.75],
+    l2h_ratios=[0.5],
     column_criteria=["by_weight", "by_activation", "by_sqformat"],
     seed=None,
 ):

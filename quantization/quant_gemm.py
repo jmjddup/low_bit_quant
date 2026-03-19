@@ -3,7 +3,7 @@ import math
 from safetensors.torch import save_file
 from safetensors.torch import load_file
 
-from quant_utils import QuantConfig, fake_quant_from_config
+from quant_utils import QuantConfig, fake_quant_from_config, gen_config
 
 def quant_gemm(A, qConfigA, B, qConfigB):
     """
@@ -96,13 +96,7 @@ def test_gemm_compare():
     wgt = weight["model.layers.0.mlp.up_proj.weight"] # shape: (m, k)
 
     qConfigA = QuantConfig(qbit=8, gsize=-1, sym=True)
-    qbits = [8, 4, 3, 2]
-    gsizes = [-1, 512, 128, 64, 16]
-    syms = [True, False]
-    configs = [
-        QuantConfig(qbit=qbit, gsize=gsize, sym=sym)
-        for qbit in qbits for gsize in gsizes for sym in syms
-    ]
+    configs = gen_config()
     results = [
         gemm_compare(act, qConfigA, wgt, qConfigB)
         for qConfigB in configs
@@ -112,8 +106,11 @@ def test_gemm_compare():
     best = results[0]
     print("=" * 124)
     print("Quantization Error Comparison (same input across all schemes)")
-    header_fmt = "{:<6}{:<32}{:>16}{:>16}{:>16}{:>16}{:>16}"
-    row_fmt    = "{:<6}{:<32}{:>16.8f}{:>16.8f}{:>16.8f}{:>16.8f}{:>16.8f}{}"
+
+    # Define max width for scheme column dynamically for perfect alignment
+    scheme_width = max(32, max(len(item["scheme"]) for item in results) + 2)
+    header_fmt = f"{{:<6}}{{:<{scheme_width}}}{{:>16}}{{:>16}}{{:>16}}{{:>16}}{{:>16}}"
+    row_fmt    = f"{{:<6}}{{:<{scheme_width}}}{{:>16.8f}}{{:>16.8f}}{{:>16.8f}}{{:>16.8f}}{{:>16.8f}}{{}}"
 
     print(header_fmt.format("Rank", "Scheme", "MSE", "MAE", "MaxAbsErr", "CosSim", "Pearson"))
     print("-" * 124)
