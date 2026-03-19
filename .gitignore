@@ -2,3 +2,5 @@ model_inference/dump/
 model_inference/__pycache__/
 *.txt
 __pycache__/
+eval/datasets/
+eval/results/

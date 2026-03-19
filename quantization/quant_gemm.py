@@ -86,7 +86,7 @@ def gemm_compare(A, qConfigA, B, qConfigB):
 
 def test_gemm_compare():
     # ACTIVATION_PATH = "/root/jmj/model_infer/proj_inputs/qwen3_0p6b_up_down_proj_inputs.pt"
-    ACTIVATION_PATH = "/root/workspace/low_bit_quant/model_inference/dump/20260319_112603/layer_000_up_proj__call_0000.pt"
+    ACTIVATION_PATH = "/root/workspace/low_bit_quant/model_inference/dump/20260319_170151/layer_000_up_proj__call_0000.pt"
     WEIGHT_PATH = "/root/fshare/models/Qwen/Qwen3-0.6B/model.safetensors"
     activation = torch.load(ACTIVATION_PATH)
     weight = load_file(WEIGHT_PATH)
