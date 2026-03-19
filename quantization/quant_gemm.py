@@ -3,7 +3,7 @@ import math
 from safetensors.torch import save_file
 from safetensors.torch import load_file
 
-from quant_utils import QuantConfig, fake_quant_int
+from quant_utils import QuantConfig, fake_quant_from_config
 
 def quant_gemm(A, qConfigA, B, qConfigB):
     """
@@ -17,12 +17,32 @@ def quant_gemm(A, qConfigA, B, qConfigB):
     """
     assert A.shape[-1] == B.shape[-1], "The number of columns in A must be equal to the number of columns in B"
 
-    A_q = fake_quant_int(A, qConfigA.qbit, qConfigA.gsize, qConfigA.sym)
-    B_q = fake_quant_int(B, qConfigB.qbit, qConfigB.gsize, qConfigB.sym)
+    # For weight mixed quant modes that rely on activation statistics,
+    # collapse activation to 2D so column importance can be computed on K.
+    act_for_weight = A.reshape(-1, A.shape[-1]) if A.dim() > 2 else A
+
+    A_q = fake_quant_from_config(weight=A, activation=None, config=qConfigA)
+    B_q = fake_quant_from_config(weight=B, activation=act_for_weight, config=qConfigB)
 
     C = torch.matmul(A_q, B_q.T)
 
     return C
+
+
+def _config_to_scheme(prefix: str, cfg: QuantConfig) -> str:
+    if cfg.mixed_mode == "by_column":
+        criterion = cfg.column_criterion if cfg.column_criterion else "by_weight"
+        return (
+            f"{prefix}(byCol-lb{cfg.low_bit}-hb{cfg.high_bit}-"
+            f"ratio{cfg.l2h_ratio}-g{cfg.gsize}-"
+            f"{'sym' if cfg.sym else 'asym'}-{criterion})"
+        )
+    if cfg.mixed_mode == "by_mask":
+        return (
+            f"{prefix}(byMask-lb{cfg.low_bit}-hb{cfg.high_bit}-"
+            f"ratio{cfg.l2h_ratio}-{'sym' if cfg.sym else 'asym'})"
+        )
+    return f"{prefix}(i{cfg.qbit}-g{cfg.gsize}-{'sym' if cfg.sym else 'asym'})"
 
 def gemm_compare(A, qConfigA, B, qConfigB):
     """
@@ -33,7 +53,7 @@ def gemm_compare(A, qConfigA, B, qConfigB):
         qConfigB: QuantConfig
     Returns:
         dict: {
-            "scheme": f"w(i{qConfigB.qbit}-g{qConfigB.gsize}-{'sym' if qConfigB.sym else 'asym'})a(i{qConfigA.qbit}-g{qConfigA.gsize}-{'sym' if qConfigA.sym else 'asym'})",
+            "scheme": scheme,
             "mse": mse,
             "mae": mae,
             "max_abs_err": max_abs_err,
@@ -53,9 +73,10 @@ def gemm_compare(A, qConfigA, B, qConfigB):
     pearson_corr = torch.corrcoef(
         torch.stack([out.flatten(), qout.flatten()])
     )[0, 1].item()
+    scheme = f"{_config_to_scheme('w', qConfigB)}{_config_to_scheme('a', qConfigA)}"
 
     return {
-        "scheme": f"w(i{qConfigB.qbit}-g{qConfigB.gsize}-{'sym' if qConfigB.sym else 'asym'})a(i{qConfigA.qbit}-g{qConfigA.gsize}-{'sym' if qConfigA.sym else 'asym'})",
+        "scheme": scheme,
         "mse": mse,
         "mae": mae,
         "max_abs_err": max_abs_err,
@@ -64,12 +85,14 @@ def gemm_compare(A, qConfigA, B, qConfigB):
     }
 
 def test_gemm_compare():
-    ACTIVATION_PATH = "/root/jmj/model_infer/proj_inputs/qwen3_0p6b_up_down_proj_inputs.pt"
+    # ACTIVATION_PATH = "/root/jmj/model_infer/proj_inputs/qwen3_0p6b_up_down_proj_inputs.pt"
+    ACTIVATION_PATH = "/root/workspace/low_bit_quant/model_inference/dump/20260319_112603/layer_000_up_proj__call_0000.pt"
     WEIGHT_PATH = "/root/fshare/models/Qwen/Qwen3-0.6B/model.safetensors"
     activation = torch.load(ACTIVATION_PATH)
     weight = load_file(WEIGHT_PATH)
 
-    act = activation["model.layers.0.mlp.up_proj"].to(torch.bfloat16) # shape: (b, s, d)
+    # act = activation["model.layers.0.mlp.up_proj"].to(torch.bfloat16) # shape: (b, s, d)
+    act = torch.load(ACTIVATION_PATH).to(torch.bfloat16)
     wgt = weight["model.layers.0.mlp.up_proj.weight"] # shape: (m, k)
 
     qConfigA = QuantConfig(qbit=8, gsize=-1, sym=True)

@@ -495,18 +495,19 @@ def test_fake_quant_from_config():
     print("=" * 140)
 
 def parse_model(model_path):
-    model = load_file(model_path)
+    # model = load_file(model_path)
+    model = torch.load("/root/workspace/low_bit_quant/model_inference/dump/20260319_112603/layer_000_up_proj__call_0000.pt")
 
     for key, value in model.items():
         print(f"{key}: {value.shape}, {value.dtype}")
     return model
 
 def main():
-    # parse_model("/root/fshare/models/Qwen/Qwen3-0.6B/model.safetensors")
+    parse_model("/root/fshare/models/Qwen/Qwen3-0.6B/model.safetensors")
     # test_fake_quant_int_multi()
     # test_fake_quant_mixed_bycolumn()
     # test_fake_quant_mixed_bymask()
-    test_fake_quant_from_config()
+    # test_fake_quant_from_config()
 
 if __name__ == "__main__":
     main()

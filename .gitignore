@@ -1,3 +1,4 @@
 model_inference/dump/
 model_inference/__pycache__/
 *.txt
+__pycache__/
