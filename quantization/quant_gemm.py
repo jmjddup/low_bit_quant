@@ -5,6 +5,38 @@ from safetensors.torch import load_file
 
 from quant_utils import QuantConfig, fake_quant_from_config, gen_config
 
+
+def _fwht_last_dim(x: torch.Tensor) -> torch.Tensor:
+    """
+    Fast Walsh-Hadamard Transform on the last dimension.
+    Output is orthonormalized by sqrt(n), i.e., H * H^T = I.
+    """
+    n = x.shape[-1]
+    if n <= 0 or (n & (n - 1)) != 0:
+        raise ValueError(f"Hadamard transform requires power-of-two last dim, got {n}")
+
+    y = x.contiguous().reshape(-1, n).float()
+    h = 1
+    while h < n:
+        y = y.view(-1, n // (2 * h), 2, h)
+        a = y[:, :, 0, :].clone()
+        b = y[:, :, 1, :].clone()
+        y[:, :, 0, :] = a + b
+        y[:, :, 1, :] = a - b
+        h *= 2
+    y = y.view(-1, n) / math.sqrt(n)
+    return y.reshape(x.shape).to(dtype=x.dtype)
+
+
+def hadamard_act_wgt(A: torch.Tensor, B: torch.Tensor):
+    """
+    Apply the same orthonormal Hadamard transform on K dimension:
+      A' = A H, B' = B H
+    which keeps A @ B^T unchanged.
+    """
+    return _fwht_last_dim(A), _fwht_last_dim(B)
+
+
 def smooth_act_wgt(A: torch.Tensor, B: torch.Tensor, alpha: float = 0.5, eps: float = 1e-6):
     """
     Smooth activation/weight on K dimension while keeping A @ B^T mathematically unchanged:
@@ -23,7 +55,14 @@ def smooth_act_wgt(A: torch.Tensor, B: torch.Tensor, alpha: float = 0.5, eps: fl
     return A_smooth, B_smooth
 
 
-def quant_gemm(A, qConfigA, B, qConfigB, enable_smooth: bool = False):
+def quant_gemm(
+    A,
+    qConfigA,
+    B,
+    qConfigB,
+    enable_smooth: bool = False,
+    enable_hadamard: bool = False,
+):
     """
     Args:
         A: (..., k)    torch.bfloat16
@@ -31,10 +70,14 @@ def quant_gemm(A, qConfigA, B, qConfigB, enable_smooth: bool = False):
         qConfigA: QuantConfig
         qConfigB: QuantConfig
         enable_smooth: bool
+        enable_hadamard: bool
     Returns:
         C: (m, n)    torch.bfloat16
     """
     assert A.shape[-1] == B.shape[-1], "The number of columns in A must be equal to the number of columns in B"
+
+    if enable_hadamard:
+        A, B = hadamard_act_wgt(A, B)
 
     if enable_smooth:
         A, B = smooth_act_wgt(A, B)
@@ -66,7 +109,14 @@ def _config_to_scheme(prefix: str, cfg: QuantConfig) -> str:
         )
     return f"{prefix}(i{cfg.qbit}-g{cfg.gsize}-{'sym' if cfg.sym else 'asym'})"
 
-def gemm_compare(A, qConfigA, B, qConfigB, enable_smooth: bool = False):
+def gemm_compare(
+    A,
+    qConfigA,
+    B,
+    qConfigB,
+    enable_smooth: bool = False,
+    enable_hadamard: bool = False,
+):
     """
     Args:
         A: (..., k)    torch.bfloat16
@@ -77,11 +127,19 @@ def gemm_compare(A, qConfigA, B, qConfigB, enable_smooth: bool = False):
         dict: {
             "scheme": scheme,
             "enable_smooth": enable_smooth,
+            "enable_hadamard": enable_hadamard,
             "mse": mse,
         }
     """
     out = torch.matmul(A, B.T)
-    qout = quant_gemm(A, qConfigA, B, qConfigB, enable_smooth=enable_smooth)
+    qout = quant_gemm(
+        A,
+        qConfigA,
+        B,
+        qConfigB,
+        enable_smooth=enable_smooth,
+        enable_hadamard=enable_hadamard,
+    )
 
     mse = torch.mean((out - qout) ** 2).item()
     scheme = f"{_config_to_scheme('w', qConfigB)}{_config_to_scheme('a', qConfigA)}"
@@ -89,6 +147,7 @@ def gemm_compare(A, qConfigA, B, qConfigB, enable_smooth: bool = False):
     return {
         "scheme": scheme,
         "enable_smooth": enable_smooth,
+        "enable_hadamard": enable_hadamard,
         "mse": mse,
     }
 
@@ -111,12 +170,22 @@ def test_gemm_compare():
         try:
             base = gemm_compare(act, qConfigA, wgt, qConfigB, enable_smooth=False)
             smooth = gemm_compare(act, qConfigA, wgt, qConfigB, enable_smooth=True)
+            hadamard = gemm_compare(
+                act,
+                qConfigA,
+                wgt,
+                qConfigB,
+                enable_smooth=False,
+                enable_hadamard=True,
+            )
             paired_results.append(
                 {
                     "scheme": base["scheme"],
-                    "mse_no_smooth": base["mse"],
+                    "mse_base": base["mse"],
                     "mse_smooth": smooth["mse"],
-                    "mse_delta": smooth["mse"] - base["mse"],
+                    "mse_delta_smooth": smooth["mse"] - base["mse"],
+                    "mse_hadamard": hadamard["mse"],
+                    "mse_delta_hadamard": hadamard["mse"] - base["mse"],
                 }
             )
         except Exception:
@@ -125,18 +194,28 @@ def test_gemm_compare():
     if not paired_results:
         raise RuntimeError("No valid quantization config remained after filtering.")
 
-    paired_results = sorted(paired_results, key=lambda x: x["mse_no_smooth"])
+    paired_results = sorted(paired_results, key=lambda x: x["mse_base"])
     best = min(paired_results, key=lambda x: x["mse_smooth"])
 
     print("=" * 140)
-    print("Quantization Error Comparison (same scheme, smooth off/on)")
+    print("Quantization Error Comparison (same scheme, smooth/hadamard vs baseline)")
     if skipped:
         print(f"Skipped {skipped} invalid configs.")
 
     scheme_width = max(32, max(len(item["scheme"]) for item in paired_results) + 2)
-    header_fmt = f"{{:<6}}{{:<{scheme_width}}}{{:>16}}{{:>16}}{{:>16}}"
-    row_fmt = f"{{:<6}}{{:<{scheme_width}}}{{:>16.8f}}{{:>16.8f}}{{:>16.8f}}{{}}"
-    print(header_fmt.format("Rank", "Scheme", "MSE(off)", "MSE(on)", "Delta(on-off)"))
+    header_fmt = f"{{:<6}}{{:<{scheme_width}}}{{:>14}}{{:>14}}{{:>16}}{{:>14}}{{:>18}}"
+    row_fmt = f"{{:<6}}{{:<{scheme_width}}}{{:>14.8f}}{{:>14.8f}}{{:>16.8f}}{{:>14.8f}}{{:>18.8f}}{{}}"
+    print(
+        header_fmt.format(
+            "Rank",
+            "Scheme",
+            "MSE(base)",
+            "MSE(smooth)",
+            "Delta(smooth)",
+            "MSE(hadamard)",
+            "Delta(hadamard)",
+        )
+    )
     print("-" * 140)
     for idx, item in enumerate(paired_results, start=1):
         marker = "  <= best MSE(on)" if item["scheme"] == best["scheme"] else ""
@@ -144,9 +223,11 @@ def test_gemm_compare():
             row_fmt.format(
                 idx,
                 item["scheme"],
-                item["mse_no_smooth"],
+                item["mse_base"],
                 item["mse_smooth"],
-                item["mse_delta"],
+                item["mse_delta_smooth"],
+                item["mse_hadamard"],
+                item["mse_delta_hadamard"],
                 marker,
             )
         )
