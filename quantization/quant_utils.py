@@ -495,8 +495,8 @@ def test_fake_quant_from_config():
     print("=" * 140)
 
 def parse_model(model_path):
-    # model = load_file(model_path)
-    model = torch.load("/root/workspace/low_bit_quant/model_inference/dump/20260319_112603/layer_000_up_proj__call_0000.pt")
+    model = load_file(model_path)
+    # model = torch.load("/root/workspace/low_bit_quant/model_inference/dump/20260319_112603/layer_000_up_proj__call_0000.pt")
 
     for key, value in model.items():
         print(f"{key}: {value.shape}, {value.dtype}")
